@@ -1,6 +1,6 @@
-// index.js - Discord Moderation Bot for Render Hosting
+// index.js - Discord Moderation Bot for Railway Hosting (with /activitycheck)
 
-// Import necessary modules from discord.js
+// Import necessary modules
 const {
     Client,
     Collection,
@@ -11,12 +11,13 @@ const {
     EmbedBuilder,
     REST,
     Routes,
-    version: djsVersion // Get discord.js version
+    ChannelType, // Needed for channel option
+    version: djsVersion
 } = require('discord.js');
-const os = require('os'); // For botinfo command
-// NOTE: Removed 'http' module - no longer needed for Render Background Worker
+const os = require('os');
+// NOTE: Removed 'http' module - not needed for Railway
 
-// --- Configuration (Loaded from Render Environment Variables) ---
+// --- Configuration (Loaded from Railway Environment Variables) ---
 const BOT_TOKEN = process.env['DISCORD_TOKEN'];
 const CLIENT_ID = process.env['CLIENT_ID'];
 const GUILD_ID = process.env['GUILD_ID']; // Still needed for command registration scope
@@ -24,10 +25,13 @@ const REGISTER_COMMANDS = process.env['REGISTER_COMMANDS'] === 'true'; // Contro
 
 // --- Constants ---
 const ROBLOX_SERVER_LINK = 'https://www.roblox.com/games/79626890965310/Squid-Game-Reborn-Ultimate-RP';
+const ACTIVITY_CHECK_THRESHOLD_MINS = 45; // Threshold for successful shift
+const ACTIVITY_CHECK_FETCH_LIMIT = 100; // How many messages to fetch per API call
+const ACTIVITY_CHECK_MAX_MESSAGES = 1000; // Max messages to process to prevent excessive load/time
 
 // Check if essential configuration is missing
 if (!BOT_TOKEN || !CLIENT_ID || !GUILD_ID) {
-    console.error("ERROR: Missing required environment variables (DISCORD_TOKEN, CLIENT_ID, GUILD_ID). Please set them in Render Environment Variables.");
+    console.error("ERROR: Missing required environment variables (DISCORD_TOKEN, CLIENT_ID, GUILD_ID). Please set them in Railway Variables.");
     process.exit(1); // Stop the bot if config is missing
 }
 
@@ -43,6 +47,13 @@ function formatUptime(uptimeSeconds) {
     const s = Math.floor(uptimeSeconds % 60);
     return `${d}d ${h}h ${m}m ${s}s`;
 }
+
+// --- Helper Function: Delay ---
+// Used to prevent hitting rate limits when fetching many messages
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 
 // --- Command Definitions ---
 const commands = [
@@ -172,6 +183,24 @@ const commands = [
         .addUserOption(option => option.setName('supervisor').setDescription('Supervisor overseeing the event (optional)').setRequired(false))
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageEvents)
         .setDMPermission(false),
+
+    // --- Activity Check Command ---
+    new SlashCommandBuilder()
+        .setName('activitycheck')
+        .setDescription('Checks shift logs in a channel for activity.')
+        .addChannelOption(option =>
+            option.setName('channel')
+                .setDescription('The channel containing shift logs (e.g., #shift-logs)')
+                .addChannelTypes(ChannelType.GuildText) // Only allow text channels
+                .setRequired(true))
+        .addIntegerOption(option =>
+            option.setName('days')
+                .setDescription(`How many days back to check (default: 7, max: 90)`)
+                .setMinValue(1)
+                .setMaxValue(90) // Limit days to prevent excessive fetching
+                .setRequired(false))
+        .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers) // Permissions needed to run
+        .setDMPermission(false),
 ];
 
 // --- Bot Client Setup ---
@@ -179,6 +208,8 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages, // Need this to read messages
+        GatewayIntentBits.MessageContent // NEEDED to read message content for parsing
     ]
 });
 
@@ -195,16 +226,12 @@ if (REGISTER_COMMANDS) {
     (async () => {
         try {
             console.log(`[REGISTER] Started refreshing ${commands.length} application (/) commands for guild ${GUILD_ID}.`);
-            // Registering to a specific Guild ID is faster for testing.
-            // For global commands (available in all servers the bot joins), use:
-            // Routes.applicationCommands(CLIENT_ID)
-            // Note: Global commands can take up to an hour to propagate.
             const data = await rest.put(
                 Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
                 { body: commands.map(cmd => cmd.toJSON()) },
             );
             console.log(`[REGISTER] Successfully reloaded ${data.length} application (/) commands for guild ${GUILD_ID}.`);
-            console.log("[REGISTER] IMPORTANT: Set REGISTER_COMMANDS to 'false' in Render Environment Variables after successful registration to avoid re-registering on every deploy.");
+            console.log("[REGISTER] IMPORTANT: Set REGISTER_COMMANDS to 'false' in Railway Variables after successful registration.");
         } catch (error) {
             console.error("[REGISTER] Error registering commands:", error);
         }
@@ -221,14 +248,13 @@ client.on(Events.ClientReady, readyClient => {
     console.log(`Ready and connected to ${readyClient.guilds.cache.size} server(s).`);
     console.log(`discord.js Version: ${djsVersion}`);
     console.log(`Node.js Version: ${process.version}`);
-    console.log(`Hosted on: Render`); // Indicate hosting platform
+    console.log(`Hosted on: Railway`); // Indicate hosting platform
     console.log(`--------------------------------------------------`);
     readyClient.user.setActivity('over the server | /help', { type: 3 });
 });
 
 
 // --- Event Handler: Interaction Create (Slash Commands) ---
-// ...(Interaction handling logic remains exactly the same as before)...
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
@@ -615,6 +641,146 @@ client.on(Events.InteractionCreate, async interaction => {
             console.log(`[EVENT] ${host.tag} announced ${eventName}. Ping: ${ping}`);
         }
 
+        // --- ACTIVITY CHECK ---
+        else if (commandName === 'activitycheck') {
+            // ... (activity check logic from previous Replit version) ...
+             await interaction.deferReply(); // Defer reply as this can take time
+
+            const channel = interaction.options.getChannel('channel');
+            const days = interaction.options.getInteger('days') ?? 7; // Default to 7 days
+            const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+
+            // Check bot permissions
+            if (!channel.permissionsFor(interaction.guild.members.me).has(PermissionFlagsBits.ReadMessageHistory)) {
+                return interaction.editReply({ content: `Error: I don't have permission to read message history in ${channel}.`, ephemeral: true });
+            }
+             if (!channel.permissionsFor(interaction.guild.members.me).has(PermissionFlagsBits.ViewChannel)) {
+                 return interaction.editReply({ content: `Error: I don't have permission to view ${channel}.`, ephemeral: true });
+            }
+
+
+            const activityData = new Map(); // Map<userId, { successful: number, failed: number, userTag: string }>
+            let processedMessages = 0;
+            let lastMessageId = null;
+            let fetchMore = true;
+
+            console.log(`[ActivityCheck] Starting check in #${channel.name} for the last ${days} days.`);
+
+            try {
+                // Fetch messages iteratively
+                while (fetchMore && processedMessages < ACTIVITY_CHECK_MAX_MESSAGES) {
+                    const options = { limit: ACTIVITY_CHECK_FETCH_LIMIT };
+                    if (lastMessageId) {
+                        options.before = lastMessageId;
+                    }
+
+                    const messages = await channel.messages.fetch(options);
+
+                    if (messages.size === 0) {
+                        fetchMore = false; // No more messages to fetch
+                        break;
+                    }
+
+                    console.log(`[ActivityCheck] Fetched ${messages.size} messages...`);
+
+                    for (const message of messages.values()) {
+                        processedMessages++;
+                        lastMessageId = message.id; // Set for the next fetch iteration
+
+                        // Stop if message is older than the start time
+                        if (message.createdTimestamp < startTime) {
+                            fetchMore = false;
+                            break; // Stop processing this batch and fetching more
+                        }
+
+                        // --- Parsing Logic ---
+                        // IMPORTANT: Adjust regex based on your exact log format!
+                        const mentionedUser = message.mentions.users.first(); // Get the first mentioned user
+                        const hasImage = message.attachments.size > 0 && message.attachments.first().contentType?.startsWith('image/');
+                        const timeMatch = message.content.match(/\b(\d+)\s*(?:mins?|minutes?)\b/i); // Matches "X min", "X mins", "X minute", "X minutes"
+                        // const rankMatch = message.content.match(/Rank:\s*(.+)/i); // Example: Matches "Rank: Supervisor" - adjust if needed
+
+                        if (mentionedUser && hasImage && timeMatch) {
+                            const userId = mentionedUser.id;
+                            const userTag = mentionedUser.tag;
+                            const duration = parseInt(timeMatch[1], 10); // Get the number of minutes
+
+                            // Initialize user data if not present
+                            if (!activityData.has(userId)) {
+                                activityData.set(userId, { successful: 0, failed: 0, userTag: userTag });
+                            }
+                            const userData = activityData.get(userId);
+
+                            // Classify shift
+                            if (duration >= ACTIVITY_CHECK_THRESHOLD_MINS) {
+                                userData.successful++;
+                            } else {
+                                userData.failed++;
+                            }
+                        }
+                        // --- End Parsing Logic ---
+                         if (processedMessages >= ACTIVITY_CHECK_MAX_MESSAGES) {
+                            console.log(`[ActivityCheck] Reached max message processing limit (${ACTIVITY_CHECK_MAX_MESSAGES}).`);
+                            fetchMore = false;
+                            break;
+                        }
+                    } // End message loop
+
+                    if (fetchMore) {
+                        await delay(500); // Small delay to avoid rate limits between fetches
+                    }
+
+                } // End while loop
+
+                console.log(`[ActivityCheck] Finished processing ${processedMessages} messages.`);
+
+                // --- Format Results ---
+                const embed = new EmbedBuilder()
+                    .setColor(0x0099FF)
+                    .setTitle(`Activity Check Results (${days} Days)`)
+                    .setDescription(`Summary of shifts logged in ${channel}:`)
+                    .setTimestamp();
+
+                if (activityData.size === 0) {
+                    embed.addFields({ name: 'No Data', value: 'No valid shift logs found matching the criteria in the specified period.' });
+                } else {
+                    let descriptionLines = [];
+                    activityData.forEach((data, userId) => {
+                        descriptionLines.push(`**${data.userTag}** (<@${userId}>):`);
+                        descriptionLines.push(`  ✅ Successful: ${data.successful}`);
+                        descriptionLines.push(`  ❌ Failed (<${ACTIVITY_CHECK_THRESHOLD_MINS}m): ${data.failed}`);
+                    });
+
+                    // Handle potential description length limits (Discord limit is 4096)
+                    // Split into multiple fields if too long
+                    let currentDescription = "";
+                    let fieldCount = 0;
+                    for(const line of descriptionLines) {
+                        if (currentDescription.length + line.length + 1 > 1024) { // Embed field value limit is 1024
+                             embed.addFields({ name: `Activity Summary ${fieldCount > 0 ? `(cont. ${fieldCount})` : ''}`, value: currentDescription });
+                             currentDescription = line + "\n";
+                             fieldCount++;
+                        } else {
+                             currentDescription += line + "\n";
+                        }
+                    }
+                     embed.addFields({ name: `Activity Summary ${fieldCount > 0 ? `(cont. ${fieldCount})` : ''}`, value: currentDescription || 'No entries found.' });
+
+                }
+                 if (processedMessages >= ACTIVITY_CHECK_MAX_MESSAGES) {
+                    embed.setFooter({ text: `Note: Processed up to the limit of ${ACTIVITY_CHECK_MAX_MESSAGES} recent messages.` });
+                }
+
+
+                await interaction.editReply({ embeds: [embed] });
+
+            } catch (error) {
+                console.error("[ActivityCheck] Error:", error);
+                await interaction.editReply({ content: `An error occurred while checking activity: ${error.message}`, ephemeral: true });
+            }
+        }
+
+
         // --- Unknown Command ---
         else {
             console.log(`[WARNING] Unknown command executed: ${commandName}`);
@@ -633,11 +799,6 @@ client.on(Events.InteractionCreate, async interaction => {
 });
 
 
-// --- Web Server for Uptime (REMOVED) ---
-// We removed the http server as it's generally not needed for Render Background Workers
-// and simplifies the code. Render manages the process lifecycle.
-
-
 // --- Login ---
 console.log("Attempting to log in to Discord...");
 client.login(BOT_TOKEN)
@@ -645,7 +806,7 @@ client.login(BOT_TOKEN)
     .catch(error => {
         console.error("[LOGIN ERROR] Discord login failed:", error);
         if (error.code === 'TokenInvalid') {
-            console.error("[LOGIN ERROR] Error: Invalid token provided. Check the DISCORD_TOKEN Environment Variable on Render.");
+            console.error("[LOGIN ERROR] Error: Invalid token provided. Check the DISCORD_TOKEN Environment Variable on Railway.");
         } else {
             console.error("[LOGIN ERROR] An unexpected error occurred during login:", error.message);
         }
