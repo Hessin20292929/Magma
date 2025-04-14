@@ -4,7 +4,7 @@
       "description": "A multi-purpose Discord bot",
       "main": "index.js",
       "scripts": {
-        "start": "node index.js", // <-- Make sure this line exists
+        "start": "node index.js",
         "test": "echo \"Error: no test specified\" && exit 1"
       },
       "keywords": [
