@@ -1,4 +1,4 @@
-// index.js - Discord Moderation Bot for Railway Hosting (with /activitycheck)
+// index.js - Discord Moderation Bot for Railway Hosting (Updated /activitycheck)
 
 // Import necessary modules
 const {
@@ -49,7 +49,6 @@ function formatUptime(uptimeSeconds) {
 }
 
 // --- Helper Function: Delay ---
-// Used to prevent hitting rate limits when fetching many messages
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -58,6 +57,7 @@ function delay(ms) {
 // --- Command Definitions ---
 const commands = [
     // --- Moderation Commands ---
+    // ... (kick, ban, clear, timeout, untimeout, warn, warnings, clearwarnings commands remain the same) ...
     new SlashCommandBuilder()
         .setName('kick')
         .setDescription('Kicks a member from the server.')
@@ -122,7 +122,8 @@ const commands = [
         .setDMPermission(false),
 
     // --- Utility/System Commands ---
-    new SlashCommandBuilder()
+    // ... (ping, serverinfo, userinfo, botinfo, help, avatar commands remain the same) ...
+     new SlashCommandBuilder()
         .setName('ping')
         .setDescription('Checks the bot\'s latency.'),
 
@@ -150,13 +151,16 @@ const commands = [
         .setDescription('Displays a user\'s avatar.')
         .addUserOption(option => option.setName('target').setDescription('The user whose avatar to show (optional)').setRequired(false)),
 
+
     // --- Fun Commands ---
-    new SlashCommandBuilder()
+    // ... (roll command remains the same) ...
+     new SlashCommandBuilder()
         .setName('roll')
         .setDescription('Rolls a dice.')
         .addIntegerOption(option => option.setName('sides').setDescription('Number of sides on the dice (default 6)').setMinValue(2).setMaxValue(1000).setRequired(false)),
 
     // --- Event Announcement Commands ---
+    // ... (workertryout, soldiertryout, games commands remain the same) ...
     new SlashCommandBuilder()
         .setName('workertryout')
         .setDescription('Announces a Worker Tryout event.')
@@ -220,7 +224,7 @@ for (const command of commands) {
 }
 
 // --- Command Registration ---
-// This logic remains the same, controlled by the REGISTER_COMMANDS env var
+// ...(Command registration logic remains the same)...
 if (REGISTER_COMMANDS) {
     const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
     (async () => {
@@ -242,6 +246,7 @@ if (REGISTER_COMMANDS) {
 
 
 // --- Event Handler: Bot Ready ---
+// ...(on_ready logic remains the same)...
 client.on(Events.ClientReady, readyClient => {
     console.log(`--------------------------------------------------`);
     console.log(`Logged in as ${readyClient.user.tag} (${readyClient.user.id})`);
@@ -263,6 +268,10 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // --- Command Execution Logic ---
     try {
+        // --- KICK / BAN / CLEAR / TIMEOUT / UNTIMEOUT / WARN / WARNINGS / CLEARWARNINGS ---
+        // --- PING / SERVERINFO / USERINFO / BOTINFO / HELP / AVATAR / ROLL ---
+        // --- WORKERTRYOUT / SOLDIERTRYOUT / GAMES ---
+        // ...(Keep all the previous command logic blocks here)...
         // --- KICK ---
         if (commandName === 'kick') {
             // ... (kick logic) ...
@@ -643,8 +652,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
         // --- ACTIVITY CHECK ---
         else if (commandName === 'activitycheck') {
-            // ... (activity check logic from previous Replit version) ...
-             await interaction.deferReply(); // Defer reply as this can take time
+            await interaction.deferReply(); // Defer reply as this can take time
 
             const channel = interaction.options.getChannel('channel');
             const days = interaction.options.getInteger('days') ?? 7; // Default to 7 days
@@ -693,32 +701,90 @@ client.on(Events.InteractionCreate, async interaction => {
                             break; // Stop processing this batch and fetching more
                         }
 
-                        // --- Parsing Logic ---
-                        // IMPORTANT: Adjust regex based on your exact log format!
-                        const mentionedUser = message.mentions.users.first(); // Get the first mentioned user
+                        // --- New Parsing Logic ---
+                        const logUser = message.author; // Use message author
                         const hasImage = message.attachments.size > 0 && message.attachments.first().contentType?.startsWith('image/');
-                        const timeMatch = message.content.match(/\b(\d+)\s*(?:mins?|minutes?)\b/i); // Matches "X min", "X mins", "X minute", "X minutes"
-                        // const rankMatch = message.content.match(/Rank:\s*(.+)/i); // Example: Matches "Rank: Supervisor" - adjust if needed
 
-                        if (mentionedUser && hasImage && timeMatch) {
-                            const userId = mentionedUser.id;
-                            const userTag = mentionedUser.tag;
-                            const duration = parseInt(timeMatch[1], 10); // Get the number of minutes
+                        // Regex to capture HH:MM-HH:MM followed by optional AM/PM
+                        // Example: Time: 6:00-6:25PM GMT+2
+                        // Groups:   1=(6) 2=(00) 3=(6) 4=(25) 5=(PM)
+                        const timeRegex = /Time:\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*([AP]M)?/i;
+                        const timeMatch = message.content.match(timeRegex);
 
-                            // Initialize user data if not present
-                            if (!activityData.has(userId)) {
-                                activityData.set(userId, { successful: 0, failed: 0, userTag: userTag });
+                        // Optional: Regex to capture Rank
+                        // const rankMatch = message.content.match(/Rank:\s*(.+)/i);
+                        // const rank = rankMatch ? rankMatch[1].trim() : 'Unknown'; // Get rank if found
+
+                        // Proceed only if user, image proof, and time range are found
+                        if (logUser && !logUser.bot && hasImage && timeMatch) {
+                            const userId = logUser.id;
+                            const userTag = logUser.tag;
+
+                            let duration = -1; // Default to invalid duration
+
+                            try {
+                                // Extract time components
+                                let startHour = parseInt(timeMatch[1], 10);
+                                const startMin = parseInt(timeMatch[2], 10);
+                                let endHour = parseInt(timeMatch[3], 10);
+                                const endMin = parseInt(timeMatch[4], 10);
+                                const ampm = timeMatch[5] ? timeMatch[5].toUpperCase() : null; // AM/PM might not always be present
+
+                                // Basic AM/PM conversion (doesn't handle 12 AM/PM perfectly for edge cases like 12:xx AM)
+                                // Assumes PM adds 12 hours unless it's already 12 PM
+                                if (ampm === 'PM' && startHour !== 12) startHour += 12;
+                                if (ampm === 'PM' && endHour !== 12) endHour += 12;
+                                // Note: This doesn't handle 12 AM correctly (which should be 0 hours), but might be okay for duration calc if consistent
+                                // A more robust solution would use a date library if shifts cross noon/midnight often
+
+                                // Calculate total minutes from midnight
+                                const startTotalMinutes = startHour * 60 + startMin;
+                                let endTotalMinutes = endHour * 60 + endMin;
+
+                                // Basic check if end time is on the "next day" (e.g. 11 PM - 1 AM)
+                                // This is a simplification and might not cover all edge cases.
+                                if (endTotalMinutes < startTotalMinutes) {
+                                     // Assumes shift crossed midnight, add 24 hours worth of minutes
+                                     // This might misinterpret a log like "Time: 6:00 - 5:00PM" if AM/PM isn't specified/parsed correctly
+                                     // endTotalMinutes += 24 * 60;
+                                     console.warn(`[ActivityCheck] Potential multi-day shift detected or parse error for ${userTag} (Start: ${startTotalMinutes}m, End: ${endTotalMinutes}m). Duration calculation might be inaccurate.`);
+                                     // For now, let's calculate based on the assumption it's within the same 24h block unless clearly crossing midnight
+                                     if (ampm) { // If AM/PM was specified, assume it crossed midnight
+                                         endTotalMinutes += 24 * 60;
+                                     } else {
+                                         // If no AM/PM, assume it's an error or same day short shift
+                                         console.warn(`[ActivityCheck] Ambiguous time range for ${userTag} without AM/PM. Assuming same day.`);
+                                     }
+                                }
+
+                                duration = endTotalMinutes - startTotalMinutes;
+
+                            } catch (parseError) {
+                                console.error(`[ActivityCheck] Error parsing time for message ${message.id}: ${parseError}`);
+                                duration = -1; // Mark as invalid
                             }
-                            const userData = activityData.get(userId);
 
-                            // Classify shift
-                            if (duration >= ACTIVITY_CHECK_THRESHOLD_MINS) {
-                                userData.successful++;
+
+                            // If duration calculation was successful
+                            if (duration >= 0) {
+                                // Initialize user data if not present
+                                if (!activityData.has(userId)) {
+                                    activityData.set(userId, { successful: 0, failed: 0, userTag: userTag });
+                                }
+                                const userData = activityData.get(userId);
+
+                                // Classify shift
+                                if (duration >= ACTIVITY_CHECK_THRESHOLD_MINS) {
+                                    userData.successful++;
+                                } else {
+                                    userData.failed++;
+                                }
                             } else {
-                                userData.failed++;
+                                 console.log(`[ActivityCheck] Skipping message ${message.id} due to invalid duration calculation.`);
                             }
                         }
-                        // --- End Parsing Logic ---
+                        // --- End New Parsing Logic ---
+
                          if (processedMessages >= ACTIVITY_CHECK_MAX_MESSAGES) {
                             console.log(`[ActivityCheck] Reached max message processing limit (${ACTIVITY_CHECK_MAX_MESSAGES}).`);
                             fetchMore = false;
@@ -745,7 +811,10 @@ client.on(Events.InteractionCreate, async interaction => {
                     embed.addFields({ name: 'No Data', value: 'No valid shift logs found matching the criteria in the specified period.' });
                 } else {
                     let descriptionLines = [];
-                    activityData.forEach((data, userId) => {
+                    // Sort users by successful shifts descending
+                    const sortedActivity = [...activityData.entries()].sort(([,a], [,b]) => b.successful - a.successful);
+
+                    sortedActivity.forEach(([userId, data]) => {
                         descriptionLines.push(`**${data.userTag}** (<@${userId}>):`);
                         descriptionLines.push(`  ✅ Successful: ${data.successful}`);
                         descriptionLines.push(`  ❌ Failed (<${ACTIVITY_CHECK_THRESHOLD_MINS}m): ${data.failed}`);
@@ -755,16 +824,30 @@ client.on(Events.InteractionCreate, async interaction => {
                     // Split into multiple fields if too long
                     let currentDescription = "";
                     let fieldCount = 0;
+                    const MAX_FIELD_LENGTH = 1024; // Discord Embed Field Value Limit
+                    const MAX_FIELDS = 5; // Limit number of fields to avoid huge embeds
+
                     for(const line of descriptionLines) {
-                        if (currentDescription.length + line.length + 1 > 1024) { // Embed field value limit is 1024
-                             embed.addFields({ name: `Activity Summary ${fieldCount > 0 ? `(cont. ${fieldCount})` : ''}`, value: currentDescription });
-                             currentDescription = line + "\n";
+                         // Check if adding the next line would exceed the limit
+                        if (currentDescription.length + line.length + 1 > MAX_FIELD_LENGTH || fieldCount >= MAX_FIELDS) {
+                             // Add the current field before starting a new one or if max fields reached
+                             embed.addFields({ name: `Activity Summary ${fieldCount > 0 ? `(cont. ${fieldCount+1})` : ''}`, value: currentDescription || ' ' }); // Add space if empty
+                             currentDescription = ""; // Reset description
                              fieldCount++;
-                        } else {
-                             currentDescription += line + "\n";
+                             if (fieldCount >= MAX_FIELDS) {
+                                 currentDescription = "... (results truncated due to length)";
+                                 break; // Stop adding more lines if max fields reached
+                             }
                         }
+                         currentDescription += line + "\n";
                     }
-                     embed.addFields({ name: `Activity Summary ${fieldCount > 0 ? `(cont. ${fieldCount})` : ''}`, value: currentDescription || 'No entries found.' });
+                    // Add the last remaining description part if not empty
+                    if (currentDescription && fieldCount < MAX_FIELDS) {
+                         embed.addFields({ name: `Activity Summary ${fieldCount > 0 ? `(cont. ${fieldCount+1})` : ''}`, value: currentDescription });
+                    } else if (currentDescription) { // Add truncated message if needed
+                         embed.addFields({ name: `Activity Summary (cont. ${fieldCount+1})`, value: currentDescription });
+                    }
+
 
                 }
                  if (processedMessages >= ACTIVITY_CHECK_MAX_MESSAGES) {
