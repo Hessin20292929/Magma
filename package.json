@@ -16,7 +16,7 @@
       "author": "Your Name",
       "license": "ISC",
       "dependencies": {
-        "discord.js": "^14.15.3" // Use the version you need
+        "discord.js": "^14.15.3"
       },
       "engines": {
         "node": ">=16.9.0"
