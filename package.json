@@ -1,0 +1,25 @@
+    {
+      "name": "my-discord-bot",
+      "version": "1.0.0",
+      "description": "A multi-purpose Discord bot",
+      "main": "index.js",
+      "scripts": {
+        "start": "node index.js", // <-- Make sure this line exists
+        "test": "echo \"Error: no test specified\" && exit 1"
+      },
+      "keywords": [
+        "discord",
+        "bot",
+        "moderation",
+        "discord.js"
+      ],
+      "author": "Your Name",
+      "license": "ISC",
+      "dependencies": {
+        "discord.js": "^14.15.3" // Use the version you need
+      },
+      "engines": {
+        "node": ">=16.9.0"
+      }
+    }
+    
